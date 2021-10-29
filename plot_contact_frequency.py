@@ -1,5 +1,6 @@
 import argparse
 import cooler
+import cooltools.lib.plotting
 import numpy as np
 import pandas as pd
 import random
@@ -16,7 +17,7 @@ def draw_heatmap(**kwargs):
     # Pivot data and return arguments
     plot_data = data.pivot(index=index, columns=columns, values=values)
     ax = sns.heatmap(
-        plot_data, xticklabels=False, yticklabels=False, cmap='afmhot_r', **kwargs
+        plot_data, xticklabels=False, yticklabels=False, cmap='fall', **kwargs
     )
     return(ax)
 
