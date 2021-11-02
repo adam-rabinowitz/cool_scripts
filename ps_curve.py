@@ -17,7 +17,7 @@ def get_cvd(path, name, ignore_diags):
     # Get contact vs distance and remove unwanted diagonals
     cvd = cooltools.expected.diagsum(
         clr,
-        regions=regions[0:1],
+        regions=regions,
         transforms={'balanced': lambda p: p['count']*p['weight1']*p['weight2']},
         ignore_diags=ignore_diags
     )
@@ -61,7 +61,7 @@ parser.add_argument(
     '--colors', nargs='+', help='input loop file'
 )
 parser.add_argument(
-    '--ignore_diags', type=int, help='ignore diagonals below this number'
+    '--ignore-diags', type=int, help='ignore diagonals below this number'
 )
 args = parser.parse_args()
 # Check arguments
@@ -82,5 +82,5 @@ cvd_list = [
 cvd_df = pd.concat(cvd_list, axis=0, ignore_index=True)
 # Create plot and save
 cvd_plot = create_plot(cvd_df, colors)
-cvd_plot.savefig('test.png', dpi=300)
+cvd_plot.savefig(args.plot, dpi=300)
 
