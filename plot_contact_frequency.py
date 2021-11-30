@@ -90,7 +90,7 @@ def get_interaction_counts(
 
 
 def read_loops(
-    path, columns, header=True, sep='\t'
+    path, columns, minsize=0, header=True, sep='\t'
 ):
     # Get columns
     assert(len(columns) == 6)
@@ -104,12 +104,17 @@ def read_loops(
             _ = infile.readline()
         # Get remaining data
         for line in infile:
+            # Extract bin data
             line_list = line.strip().split(sep)
             bin1 = [line_list[i] for i in bin1_cols]
             bin1[1], bin1[2] = int(bin1[1]), int(bin1[2])
             bin2 = [line_list[i] for i in bin2_cols]
             bin2[1], bin2[2] = int(bin2[1]), int(bin2[2])
-            loop_list.append([bin1, bin2])
+            # filter by loop size
+            loop_size = bin2[1] - bin1[2]
+            assert(loop_size) > 0
+            if loop_size >= minsize:
+                loop_list.append([bin1, bin2])
     return(loop_list)
 
 
@@ -151,6 +156,9 @@ parser.add_argument(
     help='number of bins by which to expand view (default=9)'
 )
 parser.add_argument(
+    '--minsize', type=int, default=0, help='minimum size of loops (default=0)'
+)
+parser.add_argument(
     '--average', action='store_true', help='plot avergae of all loops'
 )
 parser.add_argument(
@@ -170,7 +178,7 @@ args = parser.parse_args()
 # Get columns
 columns = [int(x) - 1 for x in args.columns.split(',')]
 # Get loops
-loop_list = read_loops(args.loops, columns=columns)
+loop_list = read_loops(args.loops, columns=columns, minsize=args.minsize)
 # Open cooler and get counts
 clr = cooler.Cooler(args.clr)
 count_list = [
