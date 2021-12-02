@@ -3,7 +3,6 @@ import cooler
 import cooltools.expected
 from matplotlib import pyplot as plt
 import pandas as pd
-import seaborn as sns
 
 
 def get_cvd(path, name, ignore_diags, chroms=None):
@@ -43,30 +42,6 @@ def get_cvd(path, name, ignore_diags, chroms=None):
     comb_exp_slope['dist.avg'] = comb_exp_slope['diag.avg'] * clr.binsize
     comb_exp_slope = comb_exp_slope[["name", "dist.avg", "slope"]]
     return(comb_exp, comb_exp_slope)
-
-
-def create_exp_plot(exp, palette):
-    ax = sns.lineplot(
-        data=exp, x='dist.avg', y='balanced.avg', hue='name', palette=palette
-    )
-    ax.set(xlabel='distance', ylabel='probability')
-    ax.set_xscale("log")
-    ax.set_yscale("log")
-    ax.legend().set_title(None)
-    fig = ax.get_figure()
-    return(fig)
-
-
-def create_exp_slope_plot(exp_slope, palette):
-    ax = sns.lineplot(
-        data=exp_slope, x='dist.avg', y='slope', hue='name', palette=palette
-    )
-    ax.set(xlabel='distance', ylabel='slope')
-    ax.set_xscale("log")
-    ax.set_yscale("log")
-    ax.legend().set_title(None)
-    fig = ax.get_figure()
-    return(fig)
 
 
 # Create argument parser
