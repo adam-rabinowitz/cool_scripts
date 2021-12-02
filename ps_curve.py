@@ -5,7 +5,7 @@ from matplotlib import pyplot as plt
 import pandas as pd
 
 
-def get_cvd(path, name, ignore_diags, chroms=None):
+def get_exp(path, name, ignore_diags, chroms=None):
     # Open clr and process chromosomes
     clr = cooler.Cooler(path)
     if chroms is None:
@@ -80,7 +80,7 @@ else:
     colors = {x: None for x in names}
 # Read data and concatenate
 exp_list = [
-   get_cvd(clr, name, args.ignore_diags, args.chroms) for
+   get_exp(clr, name, args.ignore_diags, args.chroms) for
    clr, name in zip(clrs, names)
 ]
 exp_df = pd.concat(
@@ -120,4 +120,4 @@ ax2.set_xlabel('separation')
 ax2.legend()
 ax2.set_xscale("log")
 # Save plot
-fig.savefig(args.plot, dpi=300)
+fig.savefig(args.plot, dpi=200)
