@@ -86,7 +86,6 @@ if __name__ == '__main__':
     )
     # Get insulation and save to file
     windows = list(map(int, args.windows.split(',')))
-    print(windows)
     ins = cooltools.insulation(clr, window_bp=windows)
     ins.to_csv(args.prefix + '.txt', sep='\t')
     # Parse insulation file and generate bigwigs
