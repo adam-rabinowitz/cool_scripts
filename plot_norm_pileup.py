@@ -1,6 +1,8 @@
 import argparse
 import cooler
 import cooltools
+import itertools
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
@@ -104,15 +106,17 @@ def draw_heatmap(**kwargs):
     # Create plot and return
     ax = sns.heatmap(
         plot_data, xticklabels=False, yticklabels=False, cbar=True,
-        cmap='vlag', square=True, **kwargs
+        cmap='vlag', square=True, cbar_kws={'label': 'log2(obs/exp)'}, **kwargs
     )
-    ax.set_ylabel('')    
-    ax.set_xlabel('')
+    # Set axis labels and return
+    score = data['score'].unique()[0]
+    ax.set_xlabel(score)
+    ax.set_ylabel('')
     return(ax)
 
 
 def draw_faceted_heatmap(
-    log2_avgs, names, limit, ncol
+    log2_avgs, names, scores, limit, ncol
 ):
     # Generate plot data
     log2_avgs = np.array(log2_avgs)
@@ -123,6 +127,11 @@ def draw_faceted_heatmap(
         {'value': log2_avgs.flatten()}, index=index
     )['value']
     plot_data = plot_data.reset_index()
+    # Add additional data
+    if scores:
+        plot_data['score'] = [scores[i] for i in plot_data['name']]
+    else:
+        plot_data['score'] = ''
     plot_data['name'] = [names[i] for i in plot_data['name']]
     # Set limits
     if limit is None:
@@ -133,13 +142,14 @@ def draw_faceted_heatmap(
     vmin = 0 - vmax
     # Create facet grid
     fig = sns.FacetGrid(
-        data=plot_data, col='name', col_wrap=ncol, height=3, aspect=1
+        data=plot_data, col='name', col_wrap=ncol, height=3, aspect=1.2,
+        sharex=False
     )
+    fig.figure.subplots_adjust(hspace=0.4)
     # Add plots
     fig.map_dataframe(
         draw_heatmap, vmax=vmax, vmin=vmin
     )
-    # Rename titles and return
     fig.set_titles('{col_name}')
     return(fig)
 
@@ -153,16 +163,16 @@ if __name__=="__main__":
         '--clrs', required=True, nargs='+', help='input cooler file'
     )
     parser.add_argument(
-        '--loops', required=True, help='input loop file'
+        '--loops', required=True, nargs='+', help='input loop file'
     )
     parser.add_argument(
         '--plot-width', required=True, type=int, help='width of plot in pixels'
     )
     parser.add_argument(
-        '--score-width', required=True, type=int, help='width of scored region'
+        '--prefix', required=True, help="prefix of output files"
     )
     parser.add_argument(
-        '--prefix', required=True, help="prefix of output files"
+        '--score-width', type=int, help='width of scored region'
     )
     parser.add_argument(
         '--ncol', type=int, default=2, help="number of columns in plot"
@@ -174,14 +184,20 @@ if __name__=="__main__":
     # Check arguments
     if not args.plot_width % 2:
         raise ValueError('plot width must be an odd number')
-    if not args.score_width % 2:
-        raise ValueError('score width must be an odd number')
-    if (args.plot_width / 3) < args.score_width:
-        raise ValueError('score width must be a third or less of plot width')
+    if args.score_width:
+        if not args.score_width % 2:
+            raise ValueError('score width must be an odd number')
+        if (args.plot_width / 3) < args.score_width:
+            raise ValueError(
+                'score width must be a third, or less, of plot width'
+            )
     # Parse clrs
-    clr_paths = [clr.split(':')[0] for clr in args.clrs]
-    clr_names = [clr.split(':')[1] for clr in args.clrs]
+    clr_paths, clr_names = zip(*[clr.split(':') for clr in args.clrs])
     if len(clr_names) != len(set(clr_names)):
+        raise ValueError('some names are duplicated')
+    # Parse loops
+    loop_paths, loop_names = zip(*[loop.split(':') for loop in args.loops])
+    if len(loop_names) != len(set(loop_names)):
         raise ValueError('some names are duplicated')
     # Open clrs and check resolution
     clrs = [cooler.Cooler(clr) for clr in clr_paths]
@@ -190,32 +206,42 @@ if __name__=="__main__":
         if clr.binsize != binsize:
             raise ValueError('incositent bin sizes')
     # Read loops and centre on bins
-    loops = pd.read_csv(args.loops, sep='\t')
-    loops = centre_loops(loops, binsize)
+    loops = [pd.read_csv(lps, sep='\t') for lps in loop_paths]
+    loops = [centre_loops(lps, binsize) for lps in loops]
     # Get view dataframe
-    chroms = loops['chrom1'].unique()
-    view_df = generate_view(clr, chroms=chroms)
+    chrom_list = [lps['chrom1'].unique() for lps in loops]
+    chroms = np.unique(np.concatenate(chrom_list))
+    view_df = generate_view(clrs[0], chroms=chroms)
     # Calculate expected
     expected = [cooltools.expected_cis(clr, view_df=view_df) for clr in clrs]
     # Get observed / expected pileup
     flank = ((args.plot_width - 1) // 2) * binsize
     stacks = [
         cooltools.pileup(
-            clr, features_df=loops, view_df=view_df, expected_df=exp,
-            flank=flank
+            clr, features_df=lps, view_df=view_df, expected_df=exp, flank=flank
         ) for
-        clr, exp in zip(clrs, expected)
+        (clr, exp), lps in itertools.product(
+            zip(clrs, expected), loops
+        )
     ]
+    # Generate names
+    names = ['\n'.join(x) for x in itertools.product(clr_names, loop_names)]
+    names = [n.replace('_', ' ') for n in names]
     # Calculate log2 average of observed vs expected
     log2_avgs = [calc_log2_avg(stack) for stack in stacks]
     # Calculate scores and create plot titles
-    scores = [calc_corner_score(la, args.score_width) for la in log2_avgs]
-    names = [
-        '{}\nscore={:.2f} for px={}'.format(name, score, args.score_width) for
-        name, score in zip(clr_names, scores)
-    ]
+    if args.score_width:
+        scores = [calc_corner_score(la, args.score_width) for la in log2_avgs]
+        scores = [
+            'score={:.2f} for px={}'.format(
+                score, args.score_width
+            ) for score in scores
+        ]
+    else:
+        scores = None
     # Create figure and save
     fig = draw_faceted_heatmap(
-        log2_avgs, names=names, limit=args.limit, ncol=args.ncol
+        log2_avgs, names=names, scores=scores, limit=args.limit, ncol=args.ncol
     )
     fig.savefig(args.prefix + '.png', dpi=300)
+
