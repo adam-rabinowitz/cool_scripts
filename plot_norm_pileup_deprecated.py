@@ -1,4 +1,5 @@
 import argparse
+import bioframe
 import cooler
 import cooltools
 import itertools
@@ -15,58 +16,55 @@ def generate_view(
     if chroms is None:
         chroms = clr.chromnames
     else:
+        # Circumvents bug caused by single chromosome
+        if len(chroms) == 1:
+            for chrom in clr.chromnames:
+                if chrom not in chroms:
+                    chroms = np.append(chroms, chrom)
+                    break
+        # Checks chromosome names
         for chrom in chroms:
             if chrom not in clr.chromnames:
                 raise ValueError('unrecognised chromosome {}'.format(chrom))
     # Create view and return
     regions = [
-        (chrom, 0, length) for
+        (chrom, 0, length, chrom) for
         chrom, length in zip(clr.chromnames, clr.chromsizes) if
         chrom in chroms
     ]
-    view_df = pd.DataFrame(regions, columns=['chrom', 'start', 'end'])
-    view_df['name'] = view_df['chrom']
+    # Create view dataframe and return
+    view_df = bioframe.from_list(regions)
     return(view_df)
 
 
-def get_exp(path, chroms=None):
-    # Open clr and process chromosomes
-    clr = cooler.Cooler(path)
-    if chroms is None:
-        chroms = clr.chromnames
-    else:
-        for chrom in chroms:
-            if chrom not in clr.chromnames:
-                raise ValueError('unrecognised chromosome {}'.format(chrom))
-    # Specify regions if they are not supplied
-    regions = [
-        (chrom, 0, length) for
-        chrom, length in zip(clr.chromnames, clr.chromsizes) if
-        chrom in chroms
-    ]
-    view_df = pd.DataFrame(regions, columns=['chrom', 'start', 'end'])
-    view_df['name'] = view_df['chrom']
-    # Get contact vs distance and remove unwanted diagonals
-    return(exp)
-
-
-def centre_loops(
-    loops, binsize
+def read_regions(
+    path
 ):
-    # Get middle of bins
-    middle1 = (loops['start1'] + loops['end1']) / 2
-    middle2 = (loops['start2'] + loops['end2']) / 2
-    # Assign middle to bins
-    bin1 = np.round((middle1 - (0.5 * binsize)) / binsize).astype(np.uint32)
-    bin2 = np.round((middle2 - (0.5 * binsize)) / binsize).astype(np.uint32)
-    # Reset start and end columns to bins
-    loops['start1'] = bin1 * binsize
-    loops['start2'] = bin2 * binsize
-    loops['end1'] = loops['start1'] + binsize
-    loops['end2'] = loops['start2'] + binsize
-    # Format and return
-    loops = loops[['chrom1', 'start1', 'end1', 'chrom2', 'start2', 'end2']]
-    return(loops)
+    # Read in data
+    regions = pd.read_csv(path, sep='\t')
+    # Check format and filter
+    if {'chrom', 'start', 'end'}.issubset(
+        regions.columns
+    ):
+        regions = regions[
+            ['chrom', 'start', 'end']
+        ]
+        regions['start'] = regions['start'].astype('int64')
+        regions['end'] = regions['end'].astype('int64')
+    elif {'chrom1', 'start1', 'end1', 'chrom2', 'start2', 'end1'}.issubset(
+        regions.columns
+    ):
+        regions = regions[
+            ['chrom1', 'start1', 'end1', 'chrom2', 'start2', 'end2']
+        ]
+        regions['start1'] = regions['start1'].astype('int64')
+        regions['end1'] = regions['end1'].astype('int64')
+        regions['start2'] = regions['start2'].astype('int64')
+        regions['end2'] = regions['end2'].astype('int64')
+    else:
+        raise ValueError('unexpected column names')
+    # Return data
+    return(regions)
 
 
 def calc_log2_avg(
@@ -109,30 +107,26 @@ def draw_heatmap(**kwargs):
         cmap='vlag', square=True, cbar_kws={'label': 'log2(obs/exp)'}, **kwargs
     )
     # Set axis labels and return
-    score = data['score'].unique()[0]
-    ax.set_xlabel(score)
+    ax.set_xlabel('')
     ax.set_ylabel('')
     return(ax)
 
 
 def draw_faceted_heatmap(
-    log2_avgs, names, scores, limit, ncol
+    log2_avgs, titles, limit, ncol
 ):
     # Generate plot data
     log2_avgs = np.array(log2_avgs)
     index = pd.MultiIndex.from_product(
-        [range(s) for s in log2_avgs.shape], names=['name', 'row', 'column']
+        [range(s) for s in log2_avgs.shape], names=['title', 'row', 'column']
     )
     plot_data = pd.DataFrame(
         {'value': log2_avgs.flatten()}, index=index
     )['value']
     plot_data = plot_data.reset_index()
     # Add additional data
-    if scores:
-        plot_data['score'] = [scores[i] for i in plot_data['name']]
-    else:
-        plot_data['score'] = ''
-    plot_data['name'] = [names[i] for i in plot_data['name']]
+    plot_data['title'] = [titles[i] for i in plot_data['title']]
+    print(plot_data)
     # Set limits
     if limit is None:
         abs_values = np.absolute([plot_data['value']])
@@ -141,11 +135,10 @@ def draw_faceted_heatmap(
         vmax = np.absolute(limit)
     vmin = 0 - vmax
     # Create facet grid
+    plt.subplots_adjust(hspace=0.4)
     fig = sns.FacetGrid(
-        data=plot_data, col='name', col_wrap=ncol, height=3, aspect=1.2,
-        sharex=False
+        data=plot_data, col='title', col_wrap=ncol, height=3, aspect=1.2
     )
-    fig.figure.subplots_adjust(hspace=0.4)
     # Add plots
     fig.map_dataframe(
         draw_heatmap, vmax=vmax, vmin=vmin
@@ -154,16 +147,16 @@ def draw_faceted_heatmap(
     return(fig)
 
 
-if __name__=="__main__":
+if __name__ == "__main__":
     # Create argument parser
     parser = argparse.ArgumentParser(
-        'Plot contact enrichment for loops'
+        'Plot contact enrichment for specified regions'
     )
     parser.add_argument(
         '--clrs', required=True, nargs='+', help='input cooler file'
     )
     parser.add_argument(
-        '--loops', required=True, nargs='+', help='input loop file'
+        '--regions', required=True, nargs='+', help='regions to plot'
     )
     parser.add_argument(
         '--plot-width', required=True, type=int, help='width of plot in pixels'
@@ -178,7 +171,7 @@ if __name__=="__main__":
         '--ncol', type=int, default=2, help="number of columns in plot"
     )
     parser.add_argument(
-        '--limit', type=float, default=None, help="limit of colur scale"
+        '--limit', type=float, default=None, help="limit of colour scale"
     )
     args = parser.parse_args()
     # Check arguments
@@ -194,54 +187,68 @@ if __name__=="__main__":
     # Parse clrs
     clr_paths, clr_names = zip(*[clr.split(':') for clr in args.clrs])
     if len(clr_names) != len(set(clr_names)):
-        raise ValueError('some names are duplicated')
+        raise ValueError('some clr names are duplicated')
     # Parse loops
-    loop_paths, loop_names = zip(*[loop.split(':') for loop in args.loops])
-    if len(loop_names) != len(set(loop_names)):
-        raise ValueError('some names are duplicated')
-    # Open clrs and check resolution
+    region_paths, region_names = zip(
+        *[region.split(':') for region in args.regions]
+    )
+    if len(region_names) != len(set(region_names)):
+        raise ValueError('some region names are duplicated')
+    # Open clrs, check resolution and calculate size of flanking region
     clrs = [cooler.Cooler(clr) for clr in clr_paths]
-    binsize = clrs[0].binsize
-    for clr in clrs[1:]:
-        if clr.binsize != binsize:
+    binsizes = [clr.binsize for clr in clrs]
+    for binsize in binsizes[1:]:
+        if binsize != binsizes[0]:
             raise ValueError('incositent bin sizes')
-    # Read loops and centre on bins
-    loops = [pd.read_csv(lps, sep='\t') for lps in loop_paths]
-    loops = [centre_loops(lps, binsize) for lps in loops]
-    # Get view dataframe
-    chrom_list = [lps['chrom1'].unique() for lps in loops]
+    flank = ((args.plot_width - 1) // 2) * binsizes[0]
+    # Read regions and get number of columns
+    regions = [read_regions(path) for path in region_paths]
+    # Get columns in region files
+    col_nos = [len(region.columns) for region in regions]
+    for col_no in col_nos[1:]:
+        if col_no != col_nos[0]:
+            raise ValueError('inconsitent region file format')
+    # Extract chromosomes
+    if col_nos[0] == 3:
+        chrom_list = [region['chrom'].unique() for region in regions]
+    else:
+        chrom_list = [region['chrom1'].unique() for region in regions]
     chroms = np.unique(np.concatenate(chrom_list))
+    # Create view dataframe and expected counts
     view_df = generate_view(clrs[0], chroms=chroms)
-    # Calculate expected
     expected = [cooltools.expected_cis(clr, view_df=view_df) for clr in clrs]
-    # Get observed / expected pileup
-    flank = ((args.plot_width - 1) // 2) * binsize
+    # Get observed / expected pileup and count depth
     stacks = [
         cooltools.pileup(
-            clr, features_df=lps, view_df=view_df, expected_df=exp, flank=flank
+            clr, features_df=region, view_df=view_df, expected_df=exp,
+            flank=flank
         ) for
-        (clr, exp), lps in itertools.product(
-            zip(clrs, expected), loops
+        (clr, exp), region in itertools.product(
+            zip(clrs, expected), regions
         )
     ]
+    for stack in stacks:
+        print(np.nanmin(stack, axis=2))
+    counts = [stack.shape[2] for stack in stacks]
     # Generate names
-    names = ['\n'.join(x) for x in itertools.product(clr_names, loop_names)]
-    names = [n.replace('_', ' ') for n in names]
+    titles = ['\n'.join(x) for x in itertools.product(clr_names, region_names)]
+    titles = [n.replace('_', ' ') for n in titles]
     # Calculate log2 average of observed vs expected
     log2_avgs = [calc_log2_avg(stack) for stack in stacks]
-    # Calculate scores and create plot titles
+    # Generate metrics
     if args.score_width:
         scores = [calc_corner_score(la, args.score_width) for la in log2_avgs]
-        scores = [
-            'score={:.2f} for px={}'.format(
-                score, args.score_width
-            ) for score in scores
+        metrics = [
+            'n={} & score={:.2f} for px={}'.format(
+                count, score, args.score_width
+            ) for count, score in zip(counts, scores)
         ]
     else:
-        scores = None
+        metrics = ['n={}'.format(count) for count in counts]
+    # Add metrics to titles
+    titles = [t + '\n' + m for t, m in zip(titles, metrics)]
     # Create figure and save
     fig = draw_faceted_heatmap(
-        log2_avgs, names=names, scores=scores, limit=args.limit, ncol=args.ncol
+        log2_avgs, titles=titles, limit=args.limit, ncol=args.ncol
     )
     fig.savefig(args.prefix + '.png', dpi=300)
-
