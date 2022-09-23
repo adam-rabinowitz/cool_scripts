@@ -1,47 +1,31 @@
 import argparse
+import bioframe
 import cooler
-import cooltools.expected
-from matplotlib import pyplot as plt
+import cooltools
+import numpy as np
 import pandas as pd
 
 
-def get_exp(path, name, ignore_diags, chroms=None):
-    # Open clr and process chromosomes
+def get_exp(path, name, nproc=4):
+    # Open clr and generate bioframe
     clr = cooler.Cooler(path)
-    if chroms is None:
-        chroms = clr.chromnames
-    else:
-        for chrom in chroms:
-            if chrom not in clr.chromnames:
-                raise ValueError('unrecognised chromosome {}'.format(chrom))
-    # Specify regions if they are not supplied
-    regions = [
-        (chrom, 0, length) for
-        chrom, length in zip(clr.chromnames, clr.chromsizes) if
-        chrom in chroms
-    ]
-    # Get contact vs distance and remove unwanted diagonals
-    cvd = cooltools.expected.diagsum(
-        clr,
-        regions=regions,
-        transforms={
-            'balanced': lambda p: p['count']*p['weight1']*p['weight2']
-        },
-        ignore_diags=ignore_diags
+    view_df = bioframe.make_viewframe(clr.chromsizes)
+    # Calculate expected
+    cvd = cooltools.expected_cis(
+        clr=clr,
+        view_df=view_df,
+        smooth=True,
+        aggregate_smoothed=True,
+        nproc=nproc
     )
-    # Calculate combined expected and expected
-    exp, exp_slope = cooltools.expected.logbin_expected(cvd)[0:2]
-    comb_exp, comb_exp_slope = cooltools.expected.combine_binned_expected(
-        binned_exp=exp, binned_exp_slope=exp_slope
-    )[0:2]
-    # Format data
-    comb_exp['name'] = name
-    comb_exp['dist.avg'] = comb_exp['diag.avg'] * clr.binsize
-    comb_exp = comb_exp[["name", "dist.avg", "balanced.avg"]]
-    comb_exp_slope['name'] = name
-    comb_exp_slope['dist.avg'] = comb_exp_slope['diag.avg'] * clr.binsize
-    comb_exp_slope = comb_exp_slope[["name", "dist.avg", "slope"]]
-    return(comb_exp, comb_exp_slope)
+    # Add distances, deduplicate and return
+    cvd['separation'] = cvd['dist'] * clr.binsize
+    cvd.loc[cvd['dist'] < 2, 'balanced.avg.smoothed.agg'] = np.nan
+    cvd_merged = cvd.drop_duplicates(subset=['dist'])[
+        ['separation', 'balanced.avg.smoothed.agg']
+    ]
+    cvd_merged = cvd_merged.rename(columns={'balanced.avg.smoothed.agg': name})
+    return(cvd_merged)
 
 
 # Create argument parser
@@ -55,69 +39,28 @@ parser.add_argument(
     )
 )
 parser.add_argument(
-    '--plot', required=True, help='output plot'
+    '--counts', required=True, help=('output file for counts')
 )
 parser.add_argument(
-    '--colors', nargs='+', help='input loop file'
-)
-parser.add_argument(
-    '--chroms', nargs='+',
-    help='chromosomes over which to calculate probability'
-)
-parser.add_argument(
-    '--ignore-diags', type=int, help='ignore diagonals below this number'
+    '--nproc', type=int, default=4, help=('number of processors (default=4)')
 )
 args = parser.parse_args()
-# Get names
-names = [x.split(':')[0] for x in args.clrs]
-clrs = [x.split(':')[-1] for x in args.clrs]
-# Check colours
-if args.colors is not None:
-    if len(args.colors) != len(clrs):
-        raise ValueError('single color must be provided for each clr')
-    colors = {x: '#' + y for x, y in zip(names, args.colors)}
-else:
-    colors = {x: None for x in names}
-# Read data and concatenate
-exp_list = [
-   get_exp(clr, name, args.ignore_diags, args.chroms) for
-   clr, name in zip(clrs, names)
+# Get names and paths
+clr_names, clr_paths = zip(*[clr.split(':') for clr in args.clrs])
+if len(clr_names) != len(set(clr_names)):
+    raise ValueError('repeated name')
+if len(clr_paths) != len(set(clr_paths)):
+    raise ValueError('repeated path')
+# Get list of counts vs distance
+cvd_list = [
+    get_exp(path=path, name=name, nproc=args.nproc) for
+    name, path in zip(clr_names, clr_paths)
 ]
-exp_df = pd.concat(
-    [x[0] for x in exp_list], axis=0, ignore_index=True
+# Merge data
+merged = cvd_list[0]
+for cvd in cvd_list[1:]:
+    merged = pd.merge(merged, cvd, how='outer', on='separation', sort=True)
+# Save file
+merged.to_csv(
+    args.counts, sep='\t', header=True, index=False
 )
-exp_slope_df = pd.concat(
-    [x[1] for x in exp_list], axis=0, ignore_index=True
-)
-# Create plot and save
-fig, (ax1, ax2) = plt.subplots(
-    nrows=2, ncols=1, sharex=True, figsize=[6.4, 7.4], dpi=200
-)
-fig.suptitle('P(s) Plots')
-# Create P(s) curve plot
-for name in exp_df['name'].unique():
-    plot_data = exp_df[exp_df['name'] == name]
-    ax1.plot(
-        plot_data['dist.avg'], plot_data['balanced.avg'],
-        label=name, color=colors[name]
-    )
-# Format P(s) curve plot
-ax1.set_ylabel('probability')
-ax1.xaxis.set_tick_params(which='both', labelbottom=True)
-ax1.legend()
-ax1.set_xscale("log")
-ax1.set_yscale("log")
-# Create slope plot
-for name in exp_slope_df['name'].unique():
-    plot_data = exp_slope_df[exp_slope_df['name'] == name]
-    ax2.plot(
-        plot_data['dist.avg'], plot_data['slope'], label=name,
-        color=colors[name]
-    )
-# Format slope plot
-ax2.set_ylabel('slope')
-ax2.set_xlabel('separation')
-ax2.legend()
-ax2.set_xscale("log")
-# Save plot
-fig.savefig(args.plot, dpi=200)
