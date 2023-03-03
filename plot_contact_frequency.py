@@ -1,6 +1,5 @@
 import argparse
 import cooler
-import cooltools.lib.plotting
 import numpy as np
 import pandas as pd
 import random
