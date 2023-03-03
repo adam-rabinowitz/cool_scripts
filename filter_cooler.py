@@ -1,26 +1,27 @@
 import argparse
 import cooler
 import numpy as np
-import pyranges as pr
 
 
-def find_bed_pixels(bed_path, clr_bins):
+def find_blacklist_pixels(bed_path, clr):
     '''Find pixels overlapping intervals in bed file'''
-    # Generate pyranges objects and check
-    bed_pr = pr.read_bed(bed_path)
-    clr_bins = clr_bins.rename(
-        columns={'chrom': 'Chromosome', 'start': 'Start', 'end': 'End'}
+    # Create empty set to store pixels
+    bed_pixels = set()
+    # Loop through lines of bed file
+    with open(bed_path) as bed:
+        for line in bed:
+            # Get location listed in line
+            region = line.strip().split('\t')[0:3]
+            pixel_range = clr.extent(region)
+            bed_pixels.update(range(*pixel_range))
+    # Format bed pixels and return
+    blacklist_pixels = np.sort(
+        np.array(list(bed_pixels)).astype('int64')
     )
-    bins_pr = pr.from_dict(clr_bins)
-    if not np.all(np.isin(bed_pr.chromosomes, bins_pr.chromosomes)):
-        raise ValueError('Unknown chromosomes in blacklist')
-    # Find overlapping pixels and return
-    overlaps = bins_pr.count_overlaps(bed_pr)
-    bed_pixels = np.where(overlaps.NumberOverlaps)[0]
-    return bed_pixels
+    return blacklist_pixels
 
 
-def filter_pixels(chunk, filter):
+def apply_filter(chunk, filter):
     '''Apply filter to chunk'''
     # Apply filter to chunk and return
     chunk['pixels'] = {
@@ -40,39 +41,39 @@ def filter_diagonal(chunk, first_diagonal):
         # Apply filter to chunk
         removing = (~diagonal_filter).sum()
         print('removing {} pixels by diagonal'.format(removing))
-        chunk = filter_pixels(chunk, diagonal_filter)
+        chunk = apply_filter(chunk, diagonal_filter)
     return chunk
 
 
-def filter_cis(chunk, cis_only):
+def filter_cis(chunk, clr_bins, cis_only):
     '''Filter chunk pixels by removing cis interactions'''
     # Process data if pixels are to be removed
     if cis_only:
         # Extract pixel chromosomes
-        bin_chroms = np.array(chunk['bins']['chrom']).astype('str')
+        bin_chroms = np.array(clr_bins['chrom']).astype('str')
         chrom1 = bin_chroms[chunk['pixels']['bin1_id']]
         chrom2 = bin_chroms[chunk['pixels']['bin2_id']]
         cis_filter = (chrom1 == chrom2)
         # Apply filter to chunk
         removing = (~cis_filter).sum()
         print('removing {} pixels by cis'.format(removing))
-        chunk = filter_pixels(chunk, cis_filter)
+        chunk = apply_filter(chunk, cis_filter)
     return chunk
 
 
-def filter_chroms(chunk, chroms):
+def filter_chroms(chunk, clr_bins, chroms):
     '''Filter chunk pixels by removing unwanted chromosomes'''
     # Process data if pixels are to be removed
     if chroms is not None:
         # Create chromosome filter
-        bin_chroms = np.array(chunk['bins']['chrom']).astype('str')
+        bin_chroms = np.array(clr_bins['chrom']).astype('str')
         chrom1 = bin_chroms[chunk['pixels']['bin1_id']]
         chrom2 = bin_chroms[chunk['pixels']['bin2_id']]
         chrom_filter = (np.isin(chrom1, chroms) & np.isin(chrom2, chroms))
         # Apply filter to chunk
         removing = (~chrom_filter).sum()
         print('removing {} pixels by chromosome'.format(removing))
-        chunk = filter_pixels(chunk, chrom_filter)
+        chunk = apply_filter(chunk, chrom_filter)
     return chunk
 
 
@@ -88,7 +89,7 @@ def filter_blacklist(chunk, blacklist_pixels):
         # Apply filter to chunk
         removing = (~blacklist_filter).sum()
         print('removing {} pixels by blacklist'.format(removing))
-        chunk = filter_pixels(chunk, blacklist_filter)
+        chunk = apply_filter(chunk, blacklist_filter)
     return chunk
 
 
@@ -104,36 +105,35 @@ def filter_cool(
     inclr_path, outclr_path, first_diagonal, cis_only, chroms, blacklist
 ):
     '''Combine and apply individual filters'''
-    # Open cooler
+    # Open cooler and get bins
     inclr = cooler.Cooler(inclr_path)
+    clr_bins = inclr.bins()[:]
     # Process supplied arguments
     if first_diagonal < 0:
         raise ValueError('minimum value of first_diagonal is 0')
     if chroms is not None:
         chroms = np.array(chroms).astype('str')
-        cool_chroms = np.unique(inclr.bins()[:]['chrom']).astype('str')
+        cool_chroms = np.array(inclr.chromnames)
         if not np.all(np.isin(chroms, cool_chroms)):
             raise ValueError('unknown chromosomes specified')
     # Get blacklisted pixels
     if blacklist is not None:
-        blacklist_pixels = find_bed_pixels(
-            bed_path=blacklist, clr_bins=inclr.bins()[:]
-        )
+        blacklist_pixels = find_blacklist_pixels(bed_path=blacklist, clr=inclr)
     else:
         blacklist_pixels = None
     # Create iterator
     pipeline = (
         cooler.parallel.split(
-            inclr, include_bins=True, map=map, chunksize=1000000
+            inclr, include_bins=False, map=map, chunksize=1000000
         )
         .pipe(
             filter_diagonal, first_diagonal=first_diagonal
         )
         .pipe(
-            filter_cis, cis_only=cis_only
+            filter_cis, clr_bins=clr_bins, cis_only=cis_only
         )
         .pipe(
-            filter_chroms, chroms=chroms
+            filter_chroms, clr_bins=clr_bins, chroms=chroms
         )
         .pipe(
             filter_blacklist, blacklist_pixels=blacklist_pixels
@@ -145,7 +145,7 @@ def filter_cool(
     # Filter cooler
     cooler.create_cooler(
         outclr_path,
-        bins=inclr.bins()[:][['chrom', 'start', 'end']],
+        bins=clr_bins[['chrom', 'start', 'end']],
         pixels=iter(pipeline),
         ordered=True
     )
