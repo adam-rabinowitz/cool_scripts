@@ -153,6 +153,9 @@ if __name__ == "__main__":
     parser.add_argument(
         '--limit', type=float, default=None, help="limit of colour scale"
     )
+    parser.add_argument(
+        '--ncol', type=int, default=None, help="number of columns in plot"
+    )
     args = parser.parse_args()
     # Check arguments
     if not args.plot_width % 2:
@@ -227,8 +230,16 @@ if __name__ == "__main__":
         metrics = ['n={}'.format(count) for count in counts]
     # Add metrics to titles
     titles = [t + '\n' + m for t, m in zip(titles, metrics)]
+    # Set number of columns in plot
+    if args.ncol is None:
+        if len(args.clrs) == 1:
+            ncol = len(args.regions)
+        else:
+            ncol = len(args.clrs)
+    else:
+        ncol = args.ncol
     # Create figure and save
     fig = draw_faceted_heatmap(
-        log2_avgs, titles=titles, limit=args.limit, ncol=len(args.clrs)
+        log2_avgs, titles=titles, limit=args.limit, ncol=ncol
     )
     fig.savefig(args.plot, dpi=300)
