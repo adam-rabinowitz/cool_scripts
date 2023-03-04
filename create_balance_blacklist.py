@@ -63,7 +63,7 @@ def get_filtered_bins(
     for path in clr_paths:
         # Open cooler and check shape
         clr = cooler.Cooler(path)
-        assert(clr_bins.equals(clr.bin()[:][['chrom', 'start', 'end']]))
+        assert(clr_bins.equals(clr.bins()[:][['chrom', 'start', 'end']]))
         # Get filter
         clr_filter = get_clr_filter(
             clr, min_nnz=min_nnz, min_count=min_count, mad_max=mad_max
